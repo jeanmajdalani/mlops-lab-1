@@ -165,3 +165,223 @@ The best run was the run with:
 - validation accuracy: approximately `0.796`
 
 Run ID: e60be396b97b4157af20ed1be39a6a10
+
+## Lab 3 – Docker Containerization: Questions & Answers
+
+### Question 1 – MLflow Model Registry
+
+**Q: What version number was your model given? What's the difference between a run's logged model artifact and a registered model?**
+
+**Answer:**
+
+Our Food11 model was registered as **Version 1** in the MLflow Model Registry.
+
+A logged model artifact is a model saved during a specific MLflow experiment run. It is associated with that run's parameters, metrics, and artifacts.
+
+A registered model is managed through the MLflow Model Registry, where it receives a name and version number. This makes it easier to track different model versions and select models for deployment.
+
+In our project, the registered model is named `food11`, and Version 1 is assigned the `champion` alias.
+
+### Question 2 – Model Aliases
+
+**Q: What aliases replaced the old built-in stages in MLflow? Why version a model separately from the run that produced it, and why is an alias more flexible than a fixed stage name?**
+
+**Answer:**
+
+MLflow deprecated the built-in stages such as `Staging`, `Production`, and `Archived` in favor of flexible, user-defined model aliases.
+
+Common aliases include `champion` for the currently selected model and `challenger` for a candidate model being evaluated.
+
+Versioning a model separately from its training run allows us to manage its deployment lifecycle independently from the experiment.
+
+Aliases are more flexible because they can be reassigned to different model versions without changing application code.
+
+For example:
+
+```python
+MODEL_URI = "models:/food11@champion"
+```
+
+If Version 2 performs better than Version 1, we can assign `champion` to Version 2 without modifying the model URI in our FastAPI application.
+
+### Question 3 – Loading Models Through MLflow
+
+**Q: Why load the model through an MLflow model URI (`models:/food11@champion`) instead of pointing directly at the `.pth` file on disk? What would you have to change to serve a newer model version?**
+
+**Answer:**
+
+Loading a model through an MLflow URI provides several advantages:
+
+- It avoids hardcoded local file paths.
+- It supports model versioning and centralized model management.
+- It loads the model using its logged MLflow flavor and associated metadata.
+- It makes model deployment easier to maintain.
+
+Our FastAPI application uses:
+
+```python
+model = mlflow.pyfunc.load_model(
+    "models:/food11@champion"
+)
+```
+
+To deploy a newer version, we only need to update the `champion` alias in MLflow and restart the application so that the new model is loaded.
+
+There is no need to modify the FastAPI source code.
+
+### Question 4 – Docker Layer Caching
+
+**Q: Why copy `pyproject.toml`/`uv.lock` and run `uv sync` before copying the rest of the source code, instead of copying everything at once? What happens to the build cache when you only change a line in `serve.py`?**
+
+**Answer:**
+
+Docker uses layer caching to avoid rebuilding unchanged layers.
+
+We copy `pyproject.toml` and `uv.lock` before the application source code because dependencies usually change less frequently than source files.
+
+The Dockerfile first installs dependencies:
+
+```dockerfile
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
+```
+
+Then the application code is copied into the runtime stage.
+
+If we modify only `serve.py`, Docker can reuse the cached dependency installation layers and rebuild only the affected source-code layers.
+
+This significantly reduces rebuild time.
+
+### Question 5 – Single-Stage vs Multi-Stage Docker Images
+
+**Q: What's the size difference between a naive single-stage image and your multi-stage one? Use `docker history <image>` to see which layers are the biggest.**
+
+**Answer:**
+
+A single-stage Docker image contains both build-time dependencies and runtime dependencies, which can increase its size.
+
+A multi-stage Docker build separates dependency installation from application execution. The final image contains only the components copied into the runtime stage.
+
+Our Food11 multi-stage Docker image has a size of approximately **1.97 GB**, according to `docker images`.
+
+The exact size difference compared with a naive single-stage image has not been measured yet.
+
+To inspect the image layers, we can execute:
+
+```bash
+docker history food11-api:latest
+```
+
+The largest layers are expected to come from the Python environment and machine learning dependencies, particularly PyTorch and related libraries.
+
+Multi-stage builds can reduce image size by excluding unnecessary build tools, although the final size depends on which dependencies are retained.
+
+### Question 6 – Dockerignore
+
+**Q: What happens to build speed and image size if you forget the `.dockerignore`? Which of the excluded folders would actually break the build if they were sent to the Docker daemon?**
+
+**Answer:**
+
+The `.dockerignore` file prevents unnecessary files and directories from being included in the Docker build context.
+
+In our project, we exclude directories and files such as:
+
+```text
+.venv/
+data/
+mlruns/
+mlflow.db
+.git/
+__pycache__/
+```
+
+Without `.dockerignore`:
+
+- The Docker build context may become significantly larger.
+- Sending the build context to Docker may take longer.
+- Unnecessary files may be copied into the image if the Dockerfile uses broad `COPY` instructions.
+- Sensitive or local configuration files could accidentally be included.
+
+The local `.venv/` directory is particularly problematic because it may contain Windows-specific binaries that are incompatible with the Linux container if copied into the runtime environment.
+
+The `data/` and `mlruns/` directories can also increase build size significantly.
+
+However, merely sending these directories to the Docker daemon does not automatically break the build. Problems depend on how the Dockerfile copies or uses them.
+
+### Question 7 – Docker Networking
+
+**Q: Why can't the container simply use `127.0.0.1:5000` to reach the MLflow server on your host? What does `host.docker.internal` resolve to?**
+
+**Answer:**
+
+Docker containers run in isolated networking environments.
+
+Inside a container, `127.0.0.1` refers to the container itself, not the host computer.
+
+Therefore, using `127.0.0.1:5000` inside the container would attempt to connect to an MLflow server running inside that same container.
+
+On Docker Desktop for Windows, `host.docker.internal` provides a special hostname that allows containers to reach services running on the host machine.
+
+In our project, we configured:
+
+```bash
+MLFLOW_TRACKING_URI=http://host.docker.internal:5000
+```
+
+This allows the FastAPI container to communicate with the MLflow tracking server running on Windows.
+
+### Question 8 – Container Restart and Model Persistence
+
+**Q: Stop the container and start a new one from the same image. Does the model still load correctly without you rebuilding? What does that tell you about what's baked into the image versus fetched at runtime?**
+
+**Answer:**
+
+Our application is designed to load the model from MLflow when the FastAPI server starts.
+
+The Docker image contains the application code, Python environment, and required dependencies.
+
+The model is not baked directly into the Docker image. Instead, it is retrieved from MLflow at runtime using:
+
+```python
+mlflow.pyfunc.load_model(
+    "models:/food11@champion"
+)
+```
+
+Therefore, a new container should be able to load the same model without rebuilding the image, provided that the MLflow server is accessible and the model artifacts are available.
+
+This demonstrates the separation between:
+
+- **Build-time components:** application code and dependencies.
+- **Runtime components:** MLflow connection settings and the selected model artifacts.
+
+The container recreation test should be performed to confirm this behavior.
+
+### Question 9 – Image Versioning and Reproducibility
+
+**Q: The Dockerfile and image are versioned differently — one lives in Git, the other doesn't (yet). What's still missing before another machine (like a CI runner or a Kubernetes cluster) could reliably pull and run the exact image you just built?**
+
+**Answer:**
+
+Git versions the Dockerfile and application source code, but it does not automatically store the built Docker image.
+
+To make the Docker image available to other machines, we need to publish it to a container registry such as Docker Hub.
+
+In our project, we successfully pushed the image to Docker Hub using:
+
+```bash
+docker tag food11-api:latest jeanmajdalani232/food11_api:latest
+docker push jeanmajdalani232/food11_api:latest
+```
+
+We also verified that the image could be retrieved using:
+
+```bash
+docker pull jeanmajdalani232/food11_api:latest
+```
+
+For reliable reproducibility, using a fixed version tag or image digest is preferable to relying only on `latest`, because the `latest` tag can be updated.
+
+Another machine also needs access to the MLflow server and its model artifacts, since the Food11 model is loaded at runtime rather than embedded directly in the Docker image.
+
+This approach separates source-code versioning, container-image distribution, and model management.

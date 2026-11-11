@@ -385,3 +385,190 @@ For reliable reproducibility, using a fixed version tag or image digest is prefe
 Another machine also needs access to the MLflow server and its model artifacts, since the Food11 model is loaded at runtime rather than embedded directly in the Docker image.
 
 This approach separates source-code versioning, container-image distribution, and model management.
+## Lab 4 — Docker Compose: Theory Questions and Answers
+
+### Question 1 — What happens to everything written to `/mlflow-data` if you never mount a volume there and just run the image standalone?
+
+**Answer:**
+
+Without a persistent volume, MLflow stores its database and artifacts in the container's writable filesystem. The data remains available while that container exists, but it is lost when the container is removed and replaced with a new one.
+
+In our project, we use the named volume `mlflow-data` to preserve MLflow experiments, registered models, and artifacts independently of the container lifecycle.
+
+### Question 2 — Why use a named volume instead of a bind mount? Would a bind mount work as well?
+
+**Answer:**
+
+A named volume is managed by Docker and provides persistent storage without depending on a specific directory on the host machine. It is convenient for storing MLflow databases and artifacts.
+
+A bind mount would also work, but it would depend on a host directory and could introduce filesystem permission or platform compatibility issues.
+
+For this lab, we selected a named volume because it simplifies storage management and persists across container recreation.
+
+### Question 3 — Why does `http://mlflow:5000` resolve inside Docker Compose when it did not in Lab 3?
+
+**Answer:**
+
+Docker Compose creates a private network and provides internal DNS resolution for its services.
+
+Each container can communicate with other containers using their service names. Therefore, the inference container can reach the MLflow tracking server through `http://mlflow:5000`.
+
+In Lab 3, MLflow was running on the host machine, so we used `host.docker.internal` instead.
+
+### Question 4 — Why does the frontend read `INFERENCE_URL` from an environment variable instead of hardcoding `http://inference:8000`?
+
+**Answer:**
+
+Using an environment variable makes the frontend configurable without modifying its source code or rebuilding the image.
+
+Inside Docker Compose, the frontend uses `http://inference:8000`. When running outside Compose, it can use another URL, such as `http://127.0.0.1:8000`, if the API is accessible there.
+
+This improves portability, reusability, and deployment flexibility.
+
+### Question 5 — Why do only MLflow and the frontend publish ports to the host? How does the frontend reach inference?
+
+**Answer:**
+
+MLflow publishes port `5000` to provide access to its web interface, while Streamlit publishes port `8501` for users to access the application.
+
+The inference service does not need to publish port `8000` because it is accessed internally by the frontend.
+
+Docker Compose networking allows the frontend to send HTTP requests directly to `http://inference:8000`.
+
+Keeping the inference port internal also reduces unnecessary external exposure.
+
+### Question 6 — What happens if inference starts before MLflow is ready?
+
+**Answer:**
+
+The inference service loads its model from MLflow during application startup. If MLflow is not ready, the connection or model-loading operation may fail, preventing FastAPI from starting successfully.
+
+The basic `depends_on` configuration controls startup order but does not guarantee application readiness.
+
+In our implementation, we added a healthcheck to MLflow and configured inference to wait until MLflow becomes healthy.
+
+This reduces startup failures caused by unavailable dependencies.
+
+### Question 7 — Which services have published ports according to `docker compose ps`?
+
+**Answer:**
+
+Our Docker Compose configuration publishes:
+
+- MLflow: `5000:5000`
+- Streamlit frontend: `8501:8501`
+
+The inference service listens on port `8000` inside the Docker network but does not publish it to the host.
+
+This matches our `docker-compose.yml` configuration and confirms that internal communication does not require publishing every service port.
+
+### Question 8 — After promoting a new model version, does inference use the old or new version? How can it load the new version?
+
+**Answer:**
+
+The inference application loads its model once during startup. Therefore, changing the registered model alias does not automatically replace the model already loaded in memory.
+
+We created version 2 of our `food11` model and assigned the `champion` alias to it.
+
+To load the newly selected version, we executed:
+
+```bash
+docker compose restart inference
+```
+
+After restarting, FastAPI successfully started and served predictions using the model resolved through the `champion` alias.
+
+Because versions 1 and 2 reference the same model artifacts in our test, their predictions are expected to be identical.
+
+### Question 9 — Why does restarting inference work without rebuilding the Docker image?
+
+**Answer:**
+
+The Docker image contains the application code, Python environment, and required dependencies.
+
+The model is resolved from the MLflow Model Registry at application startup rather than being permanently embedded in the image.
+
+Restarting the inference container executes the startup procedure again, allowing the application to load the model currently assigned to `champion`.
+
+Therefore, changing the registered model version does not require rebuilding the Docker image.
+
+### Question 10 — Does the model persist after `docker compose down` and `docker compose up`? What happens with `down -v`?
+
+**Answer:**
+
+Yes. We tested persistence by executing:
+
+```bash
+docker compose down
+docker compose up -d
+```
+
+After restarting the application, the MLflow Model Registry still contained:
+
+- Registered model: `food11`
+- Model version: `2`
+- Alias: `champion`
+
+This confirms that the named volume `mlflow-data` preserves the MLflow database and model artifacts when containers are removed and recreated.
+
+However, `docker compose down -v` removes the Compose-managed named volume as well. Without a backup, the MLflow database and artifacts stored in that volume would be lost.
+
+We did not execute the destructive `down -v` command because we wanted to preserve our registered models and experiments.
+
+### Question 11 — What would need to change to run three inference replicas behind a load balancer or make MLflow survive a machine failure?
+
+**Answer:**
+
+Docker Compose is primarily designed for running multi-container applications on a single Docker host. It does not provide full multi-node orchestration, automatic failover, or production-grade service scaling.
+
+For a more reliable production deployment, we could use Kubernetes or another container orchestration platform.
+
+We would need:
+
+- Multiple inference replicas managed by the orchestrator.
+- A load balancer or Kubernetes Service to distribute requests.
+- Readiness and liveness probes to monitor service health.
+- A shared, reliable model artifact store.
+- A highly available database and persistent storage for MLflow.
+- Automated recovery and deployment mechanisms.
+
+This architecture would improve scalability, fault tolerance, and availability.
+
+---
+
+## Lab 4 — Practical Results
+
+We successfully implemented a three-service application using Docker Compose:
+
+**MLflow:** Stores experiments, model versions, and registered model aliases.
+
+**FastAPI:** Loads the Food11 model from MLflow and exposes the prediction API.
+
+**Streamlit:** Provides a user interface for uploading food images and displaying predictions.
+
+### Validation Results
+
+| Test | Result |
+|---|---|
+| Docker Compose configuration | Passed |
+| MLflow healthcheck | Passed |
+| FastAPI startup | Passed |
+| Streamlit startup | Passed |
+| Frontend-to-inference communication | Passed |
+| Food11 image prediction | Passed |
+| Food category display | Passed |
+| Model version 2 registration | Passed |
+| `champion` alias promotion | Passed |
+| Inference restart without rebuild | Passed |
+| MLflow persistence after `down` / `up` | Passed |
+
+### Example Prediction
+
+For a tested food image, the application returned:
+
+- Predicted category: **Soup**
+- Confidence: **79.82%**
+- Registered model: `food11`
+- Selected alias: `champion`
+
+The project demonstrates multi-container orchestration, internal Docker networking, persistent storage, MLflow model versioning, and end-to-end model serving.

@@ -12,3 +12,4 @@ wheels/
 
 mlflow.db
 mlruns/
+/ci_data/

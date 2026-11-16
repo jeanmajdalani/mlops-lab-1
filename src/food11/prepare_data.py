@@ -1,7 +1,6 @@
-from pathlib import Path
-import shutil
 import random
-
+import shutil
+from pathlib import Path
 
 RAW_DIR = Path("data/food11_raw")
 PROCESSED_DIR = Path("data/food11_processed")

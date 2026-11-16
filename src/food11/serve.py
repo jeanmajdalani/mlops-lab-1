@@ -2,15 +2,16 @@
 import os
 from contextlib import asynccontextmanager
 from io import BytesIO
+from typing import Annotated
 
-import mlflow
 import numpy as np
 import torch
-
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from PIL import Image
 from torchvision import transforms
 
+import mlflow
+from src.food11.data import CLASSES
 
 # =====================================
 # 1. MLFLOW CONFIGURATION
@@ -71,25 +72,50 @@ transform = transforms.Compose(
 
 
 # =====================================
-# 4. LOAD MODEL AT STARTUP
+# 4. GLOBAL MODEL VARIABLE
+# =====================================
+
+# The model can be replaced by a fake
+# model during unit tests.
+
+model = None
+
+
+# =====================================
+# 5. LOAD MODEL AT STARTUP
 # =====================================
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global model
 
-    print("Loading Food11 model from MLflow...")
+    model = None
 
-    app.state.model = mlflow.pyfunc.load_model(
-        MODEL_URI
-    )
+    if os.environ.get("SKIP_MODEL"):
+        print(
+            "SKIP_MODEL enabled: "
+            "skipping MLflow model loading."
+        )
 
-    print("Model loaded successfully!")
+    else:
+        print("Loading Food11 model from MLflow...")
+
+        model = mlflow.pyfunc.load_model(
+            MODEL_URI
+        )
+
+        print("Model loaded successfully!")
+
+    app.state.model = model
 
     yield
 
+    model = None
+    app.state.model = None
+
 
 # =====================================
-# 5. CREATE FASTAPI APPLICATION
+# 6. CREATE FASTAPI APPLICATION
 # =====================================
 
 app = FastAPI(
@@ -101,7 +127,7 @@ app = FastAPI(
 
 
 # =====================================
-# 6. HEALTH ENDPOINT
+# 7. HEALTH ENDPOINT
 # =====================================
 
 @app.get("/health")
@@ -113,11 +139,18 @@ def health():
 
 
 # =====================================
-# 7. PREDICTION ENDPOINT
+# 8. PREDICTION ENDPOINT
 # =====================================
 
 @app.post("/predict")
-async def predict(file: UploadFile = File(...)):
+async def predict(file: Annotated[UploadFile, File()]):
+
+    # Check whether the model is available
+    if model is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Model is not loaded",
+        )
 
     # Validate uploaded file type
     if file.content_type not in [
@@ -131,19 +164,18 @@ async def predict(file: UploadFile = File(...)):
 
     # Read and convert uploaded image
     try:
-
         contents = await file.read()
 
         image = Image.open(
             BytesIO(contents)
         ).convert("RGB")
 
-    except Exception:
-
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid image file",
-        )
+    except (OSError, ValueError, Image.DecompressionBombError):
+     raise HTTPException(
+        status_code=400,
+        detail="Invalid image file",
+    )
+        
 
     # Apply same preprocessing as Lab 2
     image_tensor = transform(image)
@@ -154,8 +186,8 @@ async def predict(file: UploadFile = File(...)):
     # Convert tensor to NumPy array
     model_input = image_tensor.numpy()
 
-    # Predict using MLflow model
-    outputs = app.state.model.predict(
+    # Predict using the loaded model
+    outputs = model.predict(
         model_input
     )
 
@@ -188,8 +220,14 @@ async def predict(file: UploadFile = File(...)):
         confidence.item()
     )
 
+    # Convert numeric category into food name
+    category_name = CLASSES[
+        int(predicted_category)
+    ]
+
     # Return prediction result
     return {
+        "category": category_name,
         "predicted_category": predicted_category,
         "predicted_class_index": class_index,
         "confidence": confidence_score,

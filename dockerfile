@@ -31,6 +31,7 @@ COPY --from=builder /app/.venv /app/.venv
 
 # Copy only application source
 COPY src/food11/serve.py ./src/food11/serve.py
+COPY src/food11/data.py ./src/food11/data.py
 
 # Add virtual environment to PATH
 ENV PATH="/app/.venv/bin:$PATH"

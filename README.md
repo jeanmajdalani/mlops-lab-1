@@ -572,3 +572,33 @@ For a tested food image, the application returned:
 - Selected alias: `champion`
 
 The project demonstrates multi-container orchestration, internal Docker networking, persistent storage, MLflow model versioning, and end-to-end model serving.
+## Lab 5 - CI/CD
+
+GitHub Actions automatically runs Ruff, pytest, and
+Docker smoke tests before code is merged into main.
+## Lab 5 — CI/CD with GitHub Actions
+
+In this lab, I automated the testing and Docker image publishing process for my Food11 MLOps project using GitHub Actions.
+
+I implemented unit tests for the data preprocessing functions and FastAPI endpoints, added dataset validation checks, and configured a CI pipeline with three jobs:
+
+- **test:** Runs Ruff and pytest to check code quality and functionality.
+- **smoke:** Builds the Docker image and verifies that the API health endpoint works.
+- **push:** Publishes the Docker image to GitHub Container Registry (GHCR) using the Git commit SHA.
+
+I also configured branch protection for `main` and implemented an MLflow quality gate to compare candidate models against the current champion.
+
+### Results
+
+- Ruff: All checks passed.
+- Pytest: 5 tests passed.
+- Docker smoke test: Successful.
+- GitHub Actions: CI pipeline executed successfully.
+- GHCR: Docker image published and downloaded successfully.
+- MLflow: Version 4 was classified as `challenger`, while version 5 was promoted to `champion`.
+
+### Lab 5 Report
+
+The answers to the 12 lab questions, implementation details, experimental results, and CI/CD pipeline diagram are available in:
+
+**[Lab 5 — Questions and Answers](lab/lab5.md)**

@@ -197,7 +197,7 @@ def main():
     )
 
     mlflow.set_experiment(
-        "food11"
+        "food11-lab4"
     )
 
     device = torch.device(
@@ -300,10 +300,11 @@ def main():
         )
 
         mlflow.pytorch.log_model(
-    model,
-    name="model",
-    serialization_format="pickle",
-)
+            model,
+            name="model",
+            registered_model_name="food11",
+            serialization_format="pickle",
+        )
 
 if __name__ == "__main__":
     main()
